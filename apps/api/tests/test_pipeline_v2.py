@@ -8,13 +8,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.agents.workflow import run_workflow
+from apps.api.application import create_app
 from apps.api.config import Settings
-from apps.api.main import create_app
 from apps.api.schemas.briefing import Claim, Metrics, Source, Synthesis
 from apps.api.services.llm_service import LLMService, ResearchOutput
 from apps.api.services.research_plan import enrich_sources, explicit_publication, search_plan
-from apps.api.services.tavily_service import ProviderError, TavilyService, canonical_url, qualify_sources
+from apps.api.services.provider_http import ProviderError
+from apps.api.services.sources import canonical_url, qualify_sources
+from apps.api.services.tavily_service import TavilyService
 from apps.api.services.verification import assess_claims
+from apps.api.store import Store
 from apps.api.tests.test_research import NOW, payload, request, row, wait_for_job
 
 
@@ -178,7 +181,10 @@ def test_gap_loop_is_bounded_and_candidates_do_not_leak_into_summary():
                 return Synthesis(claims=[Claim(text=source.content,relevance='Explore pilot options.',source_ids=[source.id],evidence={source.id:source.content})],
                                  questions=['What are the goals?','What is the scope?','What happens next?'],gaps=['partner requirements'])
         metrics=Metrics(); research=Research(); model=Model(); stages=[]
-        report=await run_workflow(request(entity='Example Corp',mode='live'),research,model,metrics,stages.append)
+        async def progress(stage):
+            stages.append(stage)
+
+        report=await run_workflow(request(entity='Example Corp',mode='live'),research,model,metrics,progress)
         assert research.calls==2 and model.calls==2 and metrics.research_rounds==2
         assert report['claims']==[] and len(report['uncertain_claims'])==1
         assert 'launched' not in report['summary']
@@ -188,22 +194,30 @@ def test_gap_loop_is_bounded_and_candidates_do_not_leak_into_summary():
 
 
 def test_live_identity_confirmation_and_legacy_database_survive(tmp_path):
-    app=create_app(Settings(database_path=str(tmp_path/'test.db'),tavily_key='test',llm_key='test'))
-    app.state.store.create('legacy','token',{})
-    app.state.store.update('legacy',status='completed',result={'entity':'Legacy', 'sources':[]})
+    path = str(tmp_path / 'test.db')
+    store = Store(path)
+    store.create('legacy', 'token', {})
+    store.update('legacy', status='completed', result={'entity': 'Legacy', 'sources': []})
+    app=create_app(Settings(database_path=path,tavily_key='test',llm_key='test'))
     with TestClient(app) as client:
         data=payload(); data.update(mode='live',identity_confirmed=False)
         assert client.post('/api/research',json=data).status_code==422
         legacy=client.get('/api/research/legacy',headers={'Authorization':'Bearer token'})
         assert legacy.status_code==200 and legacy.json()['result']['entity']=='Legacy'
+        assert client.get('/api/research/legacy/result', headers={'Authorization': 'Bearer token'}).json() == legacy.json()['result']
+        store.create('pending', 'token', {})
+        for endpoint in ('result', 'export'):
+            response = client.get(f'/api/research/pending/{endpoint}', headers={'Authorization': 'Bearer token'})
+            assert response.status_code == 409
 
 
 def test_new_jobs_persist_evidence_and_stage_trace(tmp_path):
-    app=create_app(Settings(database_path=str(tmp_path/'test.db')))
+    path = str(tmp_path / 'test.db')
+    app=create_app(Settings(database_path=path))
     with TestClient(app) as client:
         ticket=client.post('/api/research',json=payload()).json()
         job=wait_for_job(client,ticket)
         assert job['status']=='completed'
-        with app.state.store.connect() as db:
+        with Store(path).connect() as db:
             assert db.execute('SELECT COUNT(*) FROM evidence_snapshots WHERE job_id=?',(ticket['id'],)).fetchone()[0]==3
             assert db.execute('SELECT COUNT(*) FROM job_stages WHERE job_id=?',(ticket['id'],)).fetchone()[0]>=6

@@ -1,9 +1,9 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import BriefingView from '../components/briefing';
+import BriefingView from '../features/research/briefing-view';
 import type { Briefing } from '../lib/types';
-import { api } from '../lib/api';
+import { readResearchStatus } from '../lib/api';
 
 const report: Briefing = {
   entity:'Northstar Labs',entity_type:'company',meeting_at:'2026-11-14T12:00:00Z',timezone:'Europe/Warsaw',purpose:'partnership',mode:'demo',
@@ -30,8 +30,9 @@ describe('Evidence and demo boundaries', () => {
   });
   it('sends result access tokens in headers', async () => {
     const fetchMock=vi.spyOn(globalThis,'fetch').mockResolvedValue(new Response('{}'));
-    await api('/api/research/test',{id:'test',access_token:'private-token'});
-    expect(fetchMock).toHaveBeenCalledWith('/backend/api/research/test', expect.objectContaining({headers:{Authorization:'Bearer private-token'}}));
+    await readResearchStatus({id:'test',access_token:'private-token'});
+    expect(fetchMock).toHaveBeenCalledWith('/backend/api/research/test/status', expect.objectContaining({headers:expect.any(Headers)}));
+    expect((fetchMock.mock.calls[0][1]?.headers as Headers).get('Authorization')).toBe('Bearer private-token');
     fetchMock.mockRestore();
   });
   it('separates provider date estimates from dated evidence and exposes origin', () => {

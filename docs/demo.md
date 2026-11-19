@@ -1,16 +1,11 @@
 # Demo and live acceptance
 
-## Three-minute presentation
+## Try the demo
 
-1. Problem (20s): preparing for a business conversation means checking scattered, potentially stale pages.
-2. Input (20s): company/person, identity hint, meeting time and purpose. Explain the 30-day window.
-3. Research (40s): generate a live report. Show actual stages; explain Tavily is the retrieval layer.
-4. Evidence (40s): click a citation and compare the excerpt with the original source/date. Separate the factual quote from its suggested meeting implication.
-5. Action (20s): choose a useful suggested question and export the compact briefing.
-6. Reliability (20s): show what happens with missing evidence, plus test results and limits.
-7. Impact (20s): one concise prep artifact with inspectable evidence; future calendar refreshes and identity disambiguation.
-
-If external providers fail, switch explicitly to the fictional demo and say so. Do not present Northstar Labs as real web research.
+1. Start the application using the [quick start](../README.md#quick-start-no-api-keys-required).
+2. Open **Try a demo**, choose a meeting purpose, and select **Create demo briefing**.
+3. Open a citation to inspect its excerpt and date evidence. Northstar Labs is fictional, and the source links are placeholders.
+4. Export the result as Markdown or select **Save as PDF** to open the browser's print dialog.
 
 ## Live acceptance checklist — requires locally configured keys
 
@@ -27,14 +22,3 @@ If external providers fail, switch explicitly to the fictional demo and say so. 
 - [ ] Inspect an entity with sparse recent coverage: no invented recent facts.
 - [ ] Inspect source counts, elapsed time, actual calls and configured cost estimate.
 - [ ] Export a live report and inspect the A4 print preview.
-- [ ] Capture real screenshots and a short recording without secrets.
-
-## Submission checks
-
-- [ ] Match the official Tavily challenge document and number.
-- [ ] Confirm closing timezone with organizer; do not assume Polish midnight.
-- [ ] Confirm public repository visibility and final branch.
-- [ ] Run README instructions in a clean environment.
-- [ ] Export pitch in the organizer's requested format and check every slide.
-- [ ] Add demo video/link only if required or actually available.
-- [ ] Complete the submission form and retain confirmation.

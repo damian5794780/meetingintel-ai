@@ -42,4 +42,4 @@ def demo_synthesis(sources, request=None):
         'Which integration use cases are the highest priority?',
         'What technical and commercial constraints should a pilot address?',
         'Who should participate in a follow-up technical discussion?',
-    ], open_questions=['This is a fictional demonstration. Validate the live pipeline with real API keys before submission.'])
+    ], open_questions=['Confirm which priorities and constraints apply to your meeting.'])

@@ -5,52 +5,39 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from apps.api.schemas.briefing import Briefing, Metrics, Synthesis
+from apps.api.schemas.briefing import Claim, Metrics, ResearchRequest, Source, Synthesis
 from apps.api.services.demo import demo_rows, demo_synthesis
-from apps.api.services.research_plan import enrich_sources, rank_sources, search_plan
-from apps.api.services.tavily_service import ProviderError, qualify_sources, research_window
+from apps.api.services.report import compose_briefing, neutral_questions
+from apps.api.services.research_plan import SearchQuery, enrich_sources, rank_sources, search_plan
+from apps.api.services.provider_http import ProviderError
+from apps.api.services.sources import qualify_sources, research_window
 from apps.api.services.verification import assess_claims
 
 
 class State(TypedDict, total=False):
-    queries: list
-    sources: list
-    warnings: list
+    queries: list[SearchQuery]
+    sources: list[Source]
+    warnings: list[str]
     synthesis: Synthesis
-    claims: list
-    uncertain: list
-    gaps: list
+    claims: list[Claim]
+    uncertain: list[Claim]
+    gaps: list[str]
     research_round: int
     result: dict
 
 
-def neutral_questions(request):
-    goal = request.meeting_context.desired_outcome
-    return [f'What would make {goal[:100].rstrip(".?")} successful?' if goal else 'What would make this meeting successful?',
-            'Which current priorities and constraints should we understand?',
-            'Who should participate in the next discussion, and what should we prepare?']
-
-
-def brief_summary(claims, purpose):
-    if not claims:
-        return 'No findings with explicit timing evidence were retained. Review the candidates requiring date confirmation and use the questions to clarify priorities.'
-    # Extractive composition after verification: never summarize rejected or uncertain findings as facts.
-    selected = claims[:2]
-    return f'For your {purpose} meeting: ' + ' '.join(f'“{c.text}” [{c.source_ids[0]}]' for c in selected)
-
-
-async def run_workflow(request, research, llm, metrics: Metrics, progress):
+async def run_workflow(request: ResearchRequest, research, llm, metrics: Metrics, progress):
     began = time.monotonic()
     now = datetime.now(timezone.utc)
     start, end = research_window(request, now)
 
     async def plan(state):
-        progress('planning')
+        await progress('planning')
         return {'queries': search_plan(request), 'sources': [], 'warnings': [], 'research_round': 0}
 
     async def search(state):
         followup = state['research_round'] > 0
-        progress('closing_gaps' if followup else 'researching')
+        await progress('closing_gaps' if followup else 'researching')
         queries = search_plan(request, state['gaps']) if followup else state['queries']
         warnings = list(state['warnings'])
         if request.mode == 'demo':
@@ -78,7 +65,7 @@ async def run_workflow(request, research, llm, metrics: Metrics, progress):
         return {'sources': sources, 'warnings': warnings + notes, 'research_round': state['research_round'] + 1}
 
     async def extract(state):
-        progress('extracting')
+        await progress('extracting')
         warnings = list(state['warnings'])
         candidates = [s for s in rank_sources(request, state['sources'])
                       if s.identity_match and s.content_origin == 'search_snippet'][:5]
@@ -97,7 +84,7 @@ async def run_workflow(request, research, llm, metrics: Metrics, progress):
         return {'sources': sources, 'warnings': warnings + notes}
 
     async def synthesize(state):
-        progress('synthesizing')
+        await progress('synthesizing')
         usable = [s for s in state['sources'] if s.identity_match and s.temporal_status != 'undated']
         if request.mode == 'demo':
             result = demo_synthesis(state['sources'], request)
@@ -116,7 +103,7 @@ async def run_workflow(request, research, llm, metrics: Metrics, progress):
         return {'synthesis': result}
 
     async def verify(state):
-        progress('verifying')
+        await progress('verifying')
         result = state['synthesis']
         accepted, uncertain, removed = assess_claims(result.claims, state['sources'], start, end)
         metrics.claims_removed = removed
@@ -130,50 +117,22 @@ async def run_workflow(request, research, llm, metrics: Metrics, progress):
             return 'search'
         return 'compose'
 
-    async def compose(state):
-        progress('composing')
-        synthesis = state['synthesis']
-        claims = state['claims'][:4]
-        uncertain = state['uncertain'][:max(0, 4-len(claims))]
-        # Keep the compact report to at most four findings and six reference sources.
-        by_id = {s.id: s for s in state['sources']}
-        for collection in (claims, uncertain):
-            for claim in collection:
-                ids = sorted(claim.source_ids, key=lambda sid: (
-                    bool(claim.date_evidence and claim.date_evidence in by_id[sid].content),
-                    by_id[sid].temporal_status == 'in_window'), reverse=True)[:1]
-                claim.source_ids = ids
-                claim.evidence = {sid: claim.evidence[sid] for sid in ids}
-        warnings = list(state['warnings'])
-        if request.meeting_at > now:
-            warnings.append('Research ends at generation time. Future developments before the meeting are not yet available.')
-        if metrics.claims_removed:
-            warnings.append(f'{metrics.claims_removed} findings removed: missing quotes, mismatched identity, duplicates or unsupported dates.')
-        if uncertain:
-            warnings.append('Date-unconfirmed candidates are separate from findings with explicit timing evidence. Provider dates may reflect page updates.')
-        if request.mode == 'demo':
-            warnings.insert(0, 'FICTIONAL DEMO — no web search or language model calls were made. example.com links are placeholders.')
-        if state['gaps'] and state['research_round'] >= 2:
-            warnings.append('The one permitted follow-up research round is complete. Remaining coverage gaps require discussion.')
-        warnings.append('Quotes confirm retrieved wording, not factual truth or independent identity. Questions and implications are suggestions. Event dates can differ from publication dates.')
-        questions = synthesis.questions if not metrics.claims_removed and not uncertain else neutral_questions(request)
-        # Supported discussion points first; avoid questions based on rejected or date-uncertain events.
-        targeted = [c.discussion_question for c in claims if c.discussion_question]
-        questions = list(dict.fromkeys(targeted + questions + neutral_questions(request)))[:4]
-        metrics.elapsed_seconds = round(time.monotonic()-began, 2)
-        open_questions = list(dict.fromkeys(synthesis.open_questions +
-                              (['Confirm the event dates for the date-unconfirmed candidates.'] if uncertain else []) +
-                              [f'Research gap: {g}' for g in state['gaps']]))[:3]
-        report = Briefing(entity=request.entity, entity_type=request.entity_type, meeting_at=request.meeting_at,
-                          timezone=request.timezone, purpose=request.purpose, mode=request.mode,
-                          generated_at=now, window_start=start, window_end=end,
-                          summary=brief_summary(claims, request.purpose),
-                          summary_source_ids=[c.source_ids[0] for c in claims[:2]],
-                          claims=claims, uncertain_claims=uncertain, questions=questions,
-                          meeting_context=request.meeting_context,
-                          identity_status='fictional_demo' if request.mode == 'demo' else 'user_confirmed',
-                          open_questions=open_questions, sources=state['sources'],
-                          warnings=list(dict.fromkeys(warnings)), metrics=metrics)
+    async def compose(state: State):
+        await progress('composing')
+        metrics.elapsed_seconds = round(time.monotonic() - began, 2)
+        report = compose_briefing(
+            request,
+            generated_at=now,
+            window=(start, end),
+            synthesis=state['synthesis'],
+            accepted=state['claims'],
+            uncertain=state['uncertain'],
+            sources=state['sources'],
+            warnings=state['warnings'],
+            gaps=state['gaps'],
+            research_rounds=state['research_round'],
+            metrics=metrics,
+        )
         return {'result': report.model_dump(mode='json')}
 
     graph = StateGraph(State)

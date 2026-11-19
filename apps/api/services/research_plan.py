@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
-from apps.api.services.tavily_service import canonical_url, parse_publication
+from apps.api.services.sources import canonical_url, parse_publication
 
 
 class SearchQuery(BaseModel):

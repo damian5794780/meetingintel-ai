@@ -1,4 +1,4 @@
-# Technology decisions — Tavily pre-meeting briefing challenge
+# Technology decisions — MeetingIntel
 
 Decision date: 14 November 2026. This document selects the next implementation direction. Sections marked planned are not shipped functionality. Existing demo and Docker validation remain recorded in validation.md.
 
@@ -10,13 +10,9 @@ Deliberate first-version limits: identity resolution is a user-confirmed hint, n
 
 ## Product target
 
-Official challenge: **Tavily Research Agent / Build a Pre-Meeting Briefing Agent, Problem Statement 05**. Input is a company/person plus scheduled meeting time. Output is a concise, one-page briefing covering meaningful developments in the preceding 30 days, with sources and useful discussion/open questions.
+MeetingIntel takes a company or person and a scheduled meeting time. It produces a one-page briefing covering meaningful developments in the preceding 30 days, with sources and discussion questions.
 
 Our primary demonstration scenario will be a **B2B technology partnership meeting**. Keep company/person inputs and the other meeting-purpose options. The specialization is contextual research: who the user represents, what they offer, and what outcome they want. Do not assume that every user is a seller or that every update represents a business opportunity.
-
-Official references:
-- [Event and submission instructions](https://hackculture.io/hackathons/ai-global-hackathon)
-- [Detailed Tavily challenge, Problem Statement 05](https://hackcultureplatform.blob.core.windows.net/event-assets/hackathons/6ac5c8240037f69fb28e23ec/problem_explanation_a1nx56ua55u.pdf)
 
 ## Stack selection
 
@@ -30,7 +26,7 @@ Official references:
 | External HTTP | HTTPX | Keep; use the same timeout/retry/budget boundary for Search, Extract and LLM calls |
 | Model | One provider/model with native strict JSON Schema output | Existing compatible adapter uses JSON mode; add explicit provider capability configuration |
 | Initial model candidate | Existing configurable gpt-4.1-mini | Candidate for the first live evaluation, not a measured winner or a requirement; confirm access before use |
-| Persistence | SQLite | Keep for one-process local hackathon prototype; introduce normalized source/evidence/trace records through migrations |
+| Persistence | SQLite | Store jobs in one local API process and introduce normalized source, evidence and trace records through migrations |
 | Quality checks | Pytest + Vitest + Playwright + a versioned research evaluation set | Existing engineering tests pass; add evaluations of relevance, identity and evidence support |
 | Progress | Existing polling and SSE endpoint | Polling is adequate; use fetch-based SSE when improving the progress experience |
 | Export | Existing print CSS + browser Save as PDF + Markdown | Keep; add maximum-length print tests and a report content budget |
@@ -134,13 +130,12 @@ Record engineering invariants: no dangling citations, every displayed evidence q
 
 Use existing Python logging plus SQLite stage traces first: stage duration, status, provider request ID, source counts, token usage and returned Tavily credits when available. Redact headers, keys and user/private context. Keep total token/credit budgets distinct from USD estimates. Price estimates are provider-specific and should be unavailable when configuration or usage is incomplete.
 
-Langfuse/OpenTelemetry may be added after the live path works if external tracing solves an observed debugging need. They are not required services for the hackathon stack.
+External tracing is an option if live testing identifies a debugging need. Local diagnosis uses application logs and SQLite stage records.
 
 ## Alternatives considered
 
 | Option | Decision and reason |
 |---|---|
-| Bifrost | Optional gateway later. Event instructions permit Tavily-only submissions; the challenge PDF footer mentions both, while its implementation guidance presents Bifrost as a model gateway. Confirm track-specific ambiguities with organizer. Add only for tested routing/fallback or observability that we actually demonstrate. One unconfigured provider gains little from another service. |
 | Nebius Token Factory | Potential alternative provider if credits/access and exact model capabilities fit. Do not assert structured-output support, quality or price for an untested model. Keep one primary provider initially. |
 | Tavily hosted Research | Consider after comparing evidence controls, budget and latency. Our own Search/Extract graph offers explicit meeting-context and provenance handling; do not replace it without an evaluation. |
 | Tavily Map/Crawl | Defer broad discovery. Selected Search + Extract is sufficient for a small meeting briefing; broad crawling can consume the task budget. |
@@ -152,14 +147,12 @@ Langfuse/OpenTelemetry may be added after the live path works if external tracin
 | Server PDF browser / new PDF library | Defer. Existing browser export works; enforce a short report and test page count before adding another renderer. |
 | New UI component framework | Defer. Improve the existing interface's evidence and context interactions rather than restyle working controls. |
 
-[Bifrost gateway setup](https://docs.getbifrost.ai/quickstart/gateway/setting-up)
-
 ## Implementation order and acceptance
 
 1. **Context, identity and date contracts.** Add user role/offer/outcome, explicit identity state, source date provenance and migrations. Preserve old reports. Accept when ambiguous names require confirmation and provider estimates are labeled as estimates.
 2. **Search + Extract.** Typed general/news query plans, selected-page extraction, partial failure handling and usage counting. Accept when official pages and external coverage are both reachable in mocked integration tests and snippet fallback is accurately labeled.
 3. **Structured synthesis and adaptive routing.** Native schema capability, evidence-linked findings/questions and a single gap round. Accept when invalid output/refusal/truncation is handled, missing support is excluded and budgets hold.
 4. **Briefing composition and quality evaluation.** Cited summary, ranked 3–5 findings, purpose-specific discussion points, explicit unknowns and print budget. Accept when offline cases and maximum-length print checks pass, then human review of real company/person outputs passes.
-5. **Live demonstration and submission.** Add local keys, run real provider acceptance checks, record measured outcomes, refresh screenshots/pitch, run remote CI and check official submission requirements. No automatic publication or form submission is implied.
+5. **Live integration validation.** Configure provider credentials locally, check actual company and person reports against their citations, and record observed latency and usage.
 
 The first live provider smoke test should happen as soon as keys become available, before finishing advanced features. It validates credentials, model access, actual date formats and selected request options. Passing offline tests alone does not complete this work.

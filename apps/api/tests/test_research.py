@@ -1,5 +1,9 @@
 import asyncio
+import hashlib
+import json
+import sqlite3
 import time
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -7,12 +11,13 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from apps.api.application import create_app
 from apps.api.config import Settings
-from apps.api.main import create_app
 from apps.api.schemas.briefing import Claim, Metrics, ResearchRequest, Synthesis
 from apps.api.services.llm_service import LLMService
-from apps.api.services.tavily_service import ProviderError, TavilyService, qualify_sources, research_window
-from apps.api.services.tavily_service import parse_publication
+from apps.api.services.provider_http import ProviderError
+from apps.api.services.sources import parse_publication, qualify_sources, research_window
+from apps.api.services.tavily_service import TavilyService
 from apps.api.services.verification import verify_claims
 from apps.api.store import Store
 
@@ -173,10 +178,41 @@ def test_demo_full_path_auth_export_and_sse(tmp_path):
         assert job['result']['metrics']['search_calls'] == 0
         assert 'FICTIONAL' in job['result']['warnings'][0]
         headers={'Authorization': f"Bearer {ticket['access_token']}"}
+        status = client.get(path + '/status', headers=headers)
+        assert status.json() == {field: job[field] for field in ('id', 'status', 'stage', 'revision', 'created_at', 'error')}
+        assert client.get(path + '/result', headers=headers).json() == job['result']
+        assert client.get(path + '/status').status_code == 401
+        assert client.get(path + '/result', headers={'Authorization': 'Bearer wrong'}).status_code == 404
         export=client.get(path+'/export',headers=headers)
         assert export.status_code == 200 and 'Northstar Labs' in export.text
         events=client.get(path+'/events',headers=headers)
         assert 'event: status' in events.text and 'completed' in events.text
+        event_data = next(line.removeprefix('data: ') for line in events.text.splitlines() if line.startswith('data: '))
+        assert json.loads(event_data) == job
+
+
+def test_research_responses_are_declared_in_openapi(tmp_path):
+    app = create_app(Settings(database_path=str(tmp_path / 'contract.db')))
+    paths = app.openapi()['paths']
+    for path, method, status, schema in [
+        ('/health', 'get', '200', 'HealthResponse'),
+        ('/api/research', 'post', '202', 'ResearchTicket'),
+        ('/api/research/{job_id}', 'get', '200', 'ResearchJob'),
+        ('/api/research/{job_id}/status', 'get', '200', 'ResearchStatus'),
+    ]:
+        response = paths[path][method]['responses'][status]['content']['application/json']
+        assert response['schema']['$ref'] == f'#/components/schemas/{schema}'
+
+
+def test_database_is_initialized_only_when_application_starts(tmp_path):
+    path = tmp_path / 'database' / 'jobs.db'
+    app = create_app(Settings(database_path=str(path)))
+    assert app.openapi()['paths']['/api/research']
+    assert not path.parent.exists()
+
+    with TestClient(app) as client:
+        assert path.is_file()
+        assert client.get('/health').status_code == 200
 
 
 @pytest.mark.parametrize('kind', ['company','person'])
@@ -233,11 +269,95 @@ def test_capacity_limit(tmp_path):
         assert client.post('/api/research',json=payload()).status_code==429
 
 
+def test_repeated_submission_returns_the_same_ticket_and_runs_once(tmp_path):
+    settings = Settings(database_path=str(tmp_path / 'submissions.db'), max_active=1)
+    key = 'ab' * 32
+    headers = {'Idempotency-Key': key}
+    with TestClient(create_app(settings)) as client:
+        created = client.post('/api/research', json=payload(), headers=headers)
+        assert created.status_code == 202
+        ticket = created.json()
+        replay = client.post('/api/research', json=payload(), headers=headers)
+        assert replay.status_code == 202
+        assert replay.json()['id'] == ticket['id']
+        assert replay.json()['access_token'] == ticket['access_token']
+        assert client.post('/api/research', json={**payload(), 'context': 'Changed context'}, headers=headers).status_code == 409
+        assert client.post('/api/research', json=payload(), headers={'Idempotency-Key': 'short'}).status_code == 422
+        assert wait_for_job(client, ticket)['status'] == 'completed'
+
+    with TestClient(create_app(settings)) as client:
+        replay = client.post('/api/research', json=payload(), headers=headers)
+        assert replay.json() == {**ticket, 'status': 'completed'}
+        with Store(settings.database_path).connect() as db:
+            assert db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0] == 1
+            stored = db.execute('SELECT key_hash FROM job_submissions').fetchone()[0]
+            assert stored == hashlib.sha256(bytes.fromhex(key)).hexdigest()
+
+
 def test_restart_recovery_and_persistence(tmp_path):
     path=str(tmp_path/'test.db')
     store=Store(path)
     store.create('test','token',{})
+    store.update('test', status='running', stage='researching')
     store=Store(path)
     store.recover()
-    assert store.get('test','token')['status']=='failed'
+    store.recover()
+    status = store.get_status('test', 'token')
+    assert (status['status'], status['revision']) == ('failed', 2)
+    with store.connect() as db:
+        stages = db.execute('SELECT stage FROM job_stages WHERE job_id=? ORDER BY id', ('test',)).fetchall()
+    assert [row[0] for row in stages] == ['researching', 'failed']
     assert store.get('test','invalid') is None
+
+
+def test_migration_preserves_legacy_report_and_closes_the_connection(tmp_path):
+    path = tmp_path / 'legacy.db'
+    snapshot = dict(id='legacy', status='completed', stage='completed', revision=7,
+                    created_at=NOW.isoformat(), request={'entity': 'Legacy'},
+                    result={'entity': 'Legacy', 'sources': []}, error=None)
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute('CREATE TABLE jobs (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, payload TEXT NOT NULL)')
+        db.execute('INSERT INTO jobs VALUES (?, ?, ?)',
+                   ('legacy', hashlib.sha256(b'token').hexdigest(), json.dumps(snapshot)))
+
+    store = Store(str(path))
+    assert store.get('legacy', 'token') == snapshot
+    assert Store(str(path)).get_status('legacy', 'token')['revision'] == 7
+    with store.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM job_metadata').fetchone()[0] == 1
+    with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+        db.execute('SELECT 1')
+
+
+def test_late_progress_does_not_change_a_terminal_job(tmp_path):
+    store = Store(str(tmp_path / 'jobs.db'))
+    store.create('test', 'token', {})
+    store.update('test', status='failed', stage='failed')
+    store.update('test', only_active=True, stage='composing')
+    job = store.get('test', 'token')
+    assert job['stage'] == 'failed'
+    assert job['revision'] == 1
+
+
+def test_parallel_search_cancels_pending_requests_before_raising():
+    async def run():
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class Client:
+            async def post(self, url, *, json, **kwargs):
+                if json['query'] == 'fail':
+                    await started.wait()
+                    return httpx.Response(401)
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.set()
+
+        service = TavilyService(Settings(), Client(), Metrics())
+        with pytest.raises(ProviderError, match='rejected the API key'):
+            await asyncio.wait_for(service.search(['fail', 'pending'], NOW-timedelta(days=30), NOW), timeout=1)
+        assert cancelled.is_set()
+
+    asyncio.run(run())

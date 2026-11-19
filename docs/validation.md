@@ -1,5 +1,15 @@
 # Validation record — 14 November 2026
 
+## Job reliability — 19 November 2026
+
+Passed 68 backend tests, four frontend tests, TypeScript and the generated OpenAPI contract check. Built both production images and passed all four Playwright scenarios against the isolated containers. The new browser scenario discards the first successful submission response and confirms that a retry opens the original report. Backend tests cover cancellation of pending provider calls, legacy SQLite migration, recovery history and idempotent replay after restart.
+
+## Runtime images — 19 November 2026
+
+Both images built with Docker Compose and ran in an isolated Docker network. The API image ran as a non-root user, passed `pip check`, and contained neither pytest, backend tests, nor the frontend tree. The web image ran as a non-root user and served the standalone server, static CSS, and proxied API. Its runtime inventory excluded the top-level frontend sources, test directories, test configurations, Vitest, Playwright, and the OpenAPI generator.
+
+All three Playwright scenarios passed against the images. Docker reported 281 MB for the API and 325 MB for the web image, compared with 300 MB and 968 MB for the earlier local images.
+
 ## Executed locally
 
 | Check | Observed result |
@@ -18,7 +28,7 @@
 
 Environment: Windows, Python 3.10.11, Node.js 24.13.0, npm 11.6.2. Two non-failing dependency deprecation warnings occur in Python (Starlette/AnyIO and LangGraph serialization defaults).
 
-The browser test used the real production frontend, FastAPI, SQLite and LangGraph. It generated a fictional briefing, opened evidence, downloaded Markdown, restored the job after reload, checked mobile width and produced exactly one A4 PDF page for that demo. No browser runtime errors were observed. Screenshots are under `docs/screenshots/`; generated demo PDF is under `apps/web/test-results/` (ignored runtime output).
+The browser test used the real production frontend, FastAPI, SQLite and LangGraph. It generated a fictional briefing, opened evidence, downloaded Markdown, restored the job after reload, checked mobile width and produced exactly one A4 PDF page for that demo. No browser runtime errors were observed. The generated demo PDF is under `apps/web/test-results/` (ignored test output).
 
 Windows sandbox process cleanup required stopping the two test-owned server processes after the assertions completed; the test command then returned success. CI uses Linux, but remote execution is not yet verified.
 
@@ -38,7 +48,7 @@ The browser suite against the real Docker stack returned **2 passed in 2.9 secon
 
 New backend cases cover typed general/news query planning, date-estimate separation, explicit publication labels, old-event rejection, wrong-entity screening, partial/out-of-order extraction, private-address URL rejection, native provider schema requests, model refusal, missing usage, the single gap-round limit, uncertain findings excluded from the summary, additive database compatibility and persisted source/stage records. No paid APIs were used. Automated tests do not replace live quality review.
 
-Both final containers are healthy and remain available at http://localhost:3000. Full-page screenshots were refreshed from the contextual fictional demo. The existing Docker volume was preserved throughout rebuilds.
+Both final containers are healthy and remain available at http://localhost:3000. The existing Docker volume was preserved throughout rebuilds.
 
 ## Not yet verified
 
@@ -46,7 +56,5 @@ Both final containers are healthy and remain available at http://localhost:3000.
 - Actual model output quality, identity accuracy, publication-date coverage, real latency and paid usage.
 - One-page layout for maximum-length live results. Demo PDF page count is checked, not all possible reports.
 - GitHub Actions execution: configuration exists, not remotely executed. Local Linux image builds and container tests have passed.
-- Official Tavily challenge numbering, submission timezone and required deliverable formats.
-- Pitch PDF/PPT, final live recording and hackathon submission.
 
 Use `docs/demo.md` as the remaining acceptance checklist. Do not present fictional fixtures or mocked-provider results as live research benchmarks.

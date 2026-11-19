@@ -5,7 +5,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT / '.env')
 
 
 @dataclass
@@ -28,6 +27,7 @@ class Settings:
 
     @classmethod
     def from_env(cls):
+        load_dotenv(ROOT / '.env')
         return cls(
             tavily_key=os.getenv('TAVILY_API_KEY', ''), llm_key=os.getenv('LLM_API_KEY', ''),
             llm_url=os.getenv('LLM_BASE_URL', cls.llm_url).rstrip('/'),

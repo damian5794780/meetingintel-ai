@@ -1,29 +1,11 @@
 # MeetingIntel AI
 
-**Arrive informed. Make the meeting count.**
+MeetingIntel is a local research assistant for preparing for a meeting. Enter a company or person, the meeting time, and your goal to generate a short briefing with recent developments, citations, and questions to ask.
 
-A local-first pre-meeting research assistant: enter a company or person, a meeting date and a purpose; receive a compact briefing with dated source excerpts, suggested implications and useful questions.
-
-Built for Geek Room's Global AI Hackathon 2026, targeting **Tavily Research Agent / Build a Pre-Meeting Briefing Agent (Problem Statement 05)**. See the [official challenge document](https://hackcultureplatform.blob.core.windows.net/event-assets/hackathons/6ac5c8240037f69fb28e23ec/problem_explanation_a1nx56ua55u.pdf). Deadline timezone and final submission requirements still need confirmation.
-
-![MeetingIntel AI interface](docs/screenshots/home.png)
-
-## What works
-
-- Next.js/TypeScript interface and independent FastAPI REST API.
-- Purpose-aware Tavily Search across official pages and news: three initial queries, at most two follow-up queries, bounded retries and URL deduplication.
-- Tavily Extract for selected pages, with labeled search-snippet fallback on partial failures.
-- LangGraph workflow: plan → search → extract → synthesize → verify → optional single gap round → compose.
-- Native strict JSON Schema output by default, Pydantic validation, explicit JSON-mode compatibility setting and one repair attempt.
-- Meeting context: your role, offering and desired outcome. Live requests require a confirmed identity hint.
-- Conservative evidence gate: exact source quotes, identity screening and separate sections for explicit timing versus provider date estimates.
-- Source panel with content origin, original links, date evidence and retrieval timestamps; saved content digests for provenance.
-- SQLite-backed jobs, per-job access tokens, concurrency limits and timeouts.
-- Actual workflow status through polling; SSE also available in the API.
-- Copy, Markdown download and compact browser print / Save as PDF.
-- Explicit fictional demo without keys. Live failures never fall back to fictional results.
-
-**Current validation boundary:** demo and mocked live integration tests are implemented. Real paid-provider research needs your keys and manual live acceptance checks. Docker configuration is supplied; see [validation status](docs/validation.md) for what has actually been run.
+- **Research around your meeting.** Tavily finds official pages and news, and a language model produces structured findings based on the material retrieved.
+- **Inspect the evidence.** Open a citation to see the excerpt, its date evidence, and the original publication. Findings with unconfirmed timing appear in a separate section.
+- **Take the briefing with you.** Copy it, download Markdown, or print a compact PDF from the browser.
+- **Try the workflow locally.** The fictional demo runs without API keys. Automated checks cover the demo and simulated provider responses. Live research requires Tavily and model credentials. [Validation results](docs/validation.md)
 
 ## Quick start: no API keys required
 
@@ -70,6 +52,8 @@ docker compose up --build
 
 Open http://localhost:3000. Ports bind to the local machine. SQLite uses a named volume. Stop with `docker compose down`; keep the volume to retain reports.
 
+The API image installs the runtime lockfile and copies the Python application. The web image runs the standalone Next.js build with its static assets. Tests and their dependencies are installed separately for development and CI.
+
 On Windows you can also run `.\scripts\start-docker.ps1` from the repository root. It locates Docker Desktop even in a terminal opened before installation, adds its credential helper directory to this process's PATH, and waits for both services to become healthy. It creates `.env` from the example only if the file is missing.
 
 ## Enable live research
@@ -112,7 +96,9 @@ Interactive schema: http://localhost:8000/docs.
 |---|---|---|
 | GET | `/health` | Health and live-key readiness (configuration, not provider connectivity) |
 | POST | `/api/research` | Create a demo/live job; returns ID and access token |
-| GET | `/api/research/{id}` | Status, stage, error and report |
+| GET | `/api/research/{id}/status` | Lightweight job status, stage, revision and error |
+| GET | `/api/research/{id}/result` | Completed briefing, or HTTP 409 while no result is available |
+| GET | `/api/research/{id}` | Combined job and briefing response for existing clients |
 | GET | `/api/research/{id}/events` | SSE status events until completion/failure |
 | GET | `/api/research/{id}/export` | Markdown download |
 
@@ -135,10 +121,13 @@ curl -N http://localhost:8000/api/research/JOB_ID/events \
 
 The browser stores only the most recent ticket in tab session storage, allowing reloads. Treat that ticket as a secret. Tokens are hashed in SQLite. Closing the tab can discard access to its report; no account-based history is provided.
 
+`POST /api/research` accepts an optional `Idempotency-Key` header. Generate 32 random bytes, encode them as lowercase hex, and reuse that private key if the same submission needs to be retried. The API returns the existing ticket for the same request and HTTP 409 if the key was used for different input. The browser reuses the key when the user retries the same form submission after a failed response.
+
 ## Tests
 
 ```powershell
 # Root, Windows:
+.\.venv\Scripts\python.exe -m pip install -r apps/api/requirements-dev.txt
 .\.venv\Scripts\python.exe -m pytest -q
 # apps/web:
 npm.cmd run test
@@ -147,7 +136,7 @@ npm.cmd run typecheck
 npm.cmd run test:e2e
 ```
 
-On Linux/macOS use `.venv/bin/python` and `npm`. Browser tests start their own API and production frontend: free ports 8000/3000 first. On Windows, Playwright uses installed Edge; elsewhere run `npx playwright install chromium`. `PLAYWRIGHT_CHANNEL=chrome` can select an installed Chrome. Browser tests generate desktop/mobile screenshots and an example one-page PDF in `apps/web/test-results/`.
+On Linux/macOS use `.venv/bin/python` and `npm`. Browser tests start their own API and production frontend: free ports 8000/3000 first. On Windows, Playwright uses installed Edge; elsewhere run `npx playwright install chromium`. `PLAYWRIGHT_CHANNEL=chrome` can select an installed Chrome. Browser test artifacts are written to `apps/web/test-results/`.
 
 To test the already-running Docker stack instead of starting test servers, set `E2E_EXTERNAL=1` before `npm run test:e2e` (PowerShell: `$env:E2E_EXTERNAL='1'`). The demo browser test expects live mode to be unconfigured; run it against a local demo instance without API keys.
 
@@ -169,12 +158,12 @@ flowchart LR
 
 ```text
 apps/api/       FastAPI, LangGraph, provider adapters, schemas and tests
-apps/web/       Next.js interface, Vitest and Playwright checks
-docs/           Plan, architecture, validation, demo script and pitch content
+apps/web/       Next.js interface, research feature, generated API types and browser tests
+docs/           Architecture, technical decisions, demo guide and validation results
 .github/        Automated CI
 ```
 
-See [implementation plan](docs/PLAN.md), [technology decisions and next-phase design](docs/technology-decisions.md), [architecture](docs/architecture.md), [demo script](docs/demo.md) and [pitch content](docs/pitch.md).
+See the [architecture guide](docs/architecture.md#code-map) for the code map and API contract, [technical decisions](docs/technology-decisions.md) for design trade-offs, and the [demo guide](docs/demo.md) for a walkthrough and Live validation checks.
 
 ## Prototype limits
 
@@ -185,7 +174,3 @@ See [implementation plan](docs/PLAN.md), [technology decisions and next-phase de
 - Print layout targets one A4 page. Automated checks include the fictional demo and a long mixed-certainty fixture; real results and different print settings still need print-preview review. Uncertain candidates' suggested implications remain in the app and are omitted from the compact printout.
 - No calendar integration, account history, automatic contradiction resolution or direct PDF-generation service.
 - shadcn/ui was deferred; accessible native controls and Tailwind/CSS keep the initial dependency surface small.
-
-## Before submitting
-
-Run live company and person cases, inspect citations manually, record a short demo, verify the official Tavily challenge and deadline/timezone, export the pitch to the required format, and confirm repository visibility. Live results, screenshots and performance claims must reflect observed behavior. No paid live validation or contest submission is implied by passing the fixture tests.

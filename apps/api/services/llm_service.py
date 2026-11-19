@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from apps.api.schemas.briefing import Claim, Synthesis
-from apps.api.services.tavily_service import ProviderError, post_json
+from apps.api.services.provider_http import ProviderError, post_json
 
 
 class EvidenceQuote(BaseModel):
